@@ -1,0 +1,32 @@
+{
+    "scan_time": "2026-03-10 01:59:41",
+    "total_alerts": 2,
+    "threshold_used": 5,
+    "time_window_s": 60,
+    "alerts": [
+        {
+            "ip": "192.168.1.105",
+            "count": 7,
+            "first_seen": "21:03:11",
+            "last_seen": "21:03:40",
+            "usernames": [
+                "root",
+                "admin",
+                "test"
+            ],
+            "severity": "MEDIUM"
+        },
+        {
+            "ip": "10.0.0.55",
+            "count": 6,
+            "first_seen": "21:10:45",
+            "last_seen": "21:11:10",
+            "usernames": [
+                "root",
+                "admin",
+                "test"
+            ],
+            "severity": "LOW"
+        }
+    ]
+}

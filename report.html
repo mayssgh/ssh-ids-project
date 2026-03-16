@@ -41,7 +41,7 @@
 
         .cards {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -58,6 +58,10 @@
             font-size: 32px;
             font-weight: bold;
             color: #00e5ff;
+        }
+
+        .card .number.ml {
+            color: #7c3aed;
         }
 
         .card .label {
@@ -84,6 +88,7 @@
             border: 1px solid #1e2535;
             border-radius: 8px;
             overflow: hidden;
+            margin-bottom: 24px;
         }
 
         .table-wrap h2 {
@@ -93,6 +98,10 @@
             text-transform: uppercase;
             color: #00e5ff;
             border-bottom: 1px solid #1e2535;
+        }
+
+        .table-wrap h2.ml {
+            color: #7c3aed;
         }
 
         table {
@@ -139,19 +148,23 @@
 <div class="container">
 
     <div class="header">
-        <h1>⚡ SSH Brute-Force IDS — Threat Report</h1>
-        <p>Generated: 2026-03-10 03:56:00 &nbsp;|&nbsp; Log file: auth.log &nbsp;|&nbsp;
+        <h1>SSH Brute-Force IDS — Threat Report</h1>
+        <p>Generated: 2026-03-17 00:56:02 &nbsp;|&nbsp; Log file: auth.log &nbsp;|&nbsp;
         Threshold: 5 attempts / 60s</p>
     </div>
 
     <div class="cards">
         <div class="card">
             <div class="number">2</div>
-            <div class="label">Threats Detected</div>
+            <div class="label">Rule Alerts</div>
+        </div>
+        <div class="card">
+            <div class="number ml">1</div>
+            <div class="label">ML Anomalies</div>
         </div>
         <div class="card">
             <div class="number">5</div>
-            <div class="label">Alert Threshold</div>
+            <div class="label">Threshold</div>
         </div>
         <div class="card">
             <div class="number">60s</div>
@@ -164,7 +177,7 @@
     </div>
 
     <div class="table-wrap">
-        <h2>// Attack Details</h2>
+        <h2>// Rule-Based Detection</h2>
         <table>
             <thead>
                 <tr>
@@ -197,6 +210,34 @@
                 <td>21:11:10</td>
                 <td>test, admin, root</td>
                 <td><span style="background:#2196F3;color:white;padding:3px 10px;border-radius:12px;font-size:12px;">LOW</span></td>
+            </tr>
+            
+            </tbody>
+        </table>
+    </div>
+
+    <div class="table-wrap">
+        <h2 class="ml">// ML Anomaly Detection</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>IP Address</th>
+                    <th>Attempts</th>
+                    <th>Unique Users</th>
+                    <th>Avg Interval</th>
+                    <th>Anomaly Score</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                
+            <tr>
+                <td><code>192.168.1.200</code></td>
+                <td>3</td>
+                <td>1</td>
+                <td>43.0s</td>
+                <td>-0.1276</td>
+                <td><span style="background:#ff4444;color:white;padding:3px 10px;border-radius:12px;font-size:12px;">ANOMALY</span></td>
             </tr>
             
             </tbody>

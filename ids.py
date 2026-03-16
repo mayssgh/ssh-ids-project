@@ -1,5 +1,6 @@
 import re
 import json
+import time
 from datetime import datetime
 from collections import defaultdict
 
@@ -26,9 +27,9 @@ def parse_log(filepath):
         for line in f:
             match = re.search(pattern, line)
             if match:
-                raw_time = match.group(1)   # "Mar  9 21:03:11"
-                username = match.group(2)   # "root"
-                ip       = match.group(3)   # "192.168.1.105"
+                raw_time = match.group(1)
+                username = match.group(2)
+                ip       = match.group(3)
 
                 # Convert raw time string into a datetime object
                 time_obj = datetime.strptime(raw_time, "%b %d %H:%M:%S")
@@ -122,20 +123,103 @@ def save_alerts(attacks, filepath):
     print(f"[*] Alerts saved to {filepath}")
 
 
-def generate_html_report(attacks, filepath="report.html"):
+def ml_anomaly_detection(failed_attempts):
+    """
+    Uses Isolation Forest (unsupervised ML model)
+    to detect anomalies in login attempt patterns.
+    Works alongside rule-based detection to catch
+    subtle attacks that stay under the threshold.
+    """
+    from sklearn.ensemble import IsolationForest
+    import numpy as np
+
+    if len(failed_attempts) < 3:
+        print("[~] Not enough data for ML analysis (need 3+ entries)")
+        return []
+
+    # Build feature matrix — convert each IP's behavior into numbers
+    ip_features = {}
+
+    for attempt in failed_attempts:
+        ip = attempt["ip"]
+        if ip not in ip_features:
+            ip_features[ip] = {
+                "times":     [],
+                "usernames": set()
+            }
+        ip_features[ip]["times"].append(
+            attempt["time"].hour * 3600 +
+            attempt["time"].minute * 60 +
+            attempt["time"].second
+        )
+        ip_features[ip]["usernames"].add(attempt["username"])
+
+    # Convert to feature vectors
+    # Each IP becomes: [attempt_count, time_spread, unique_users, avg_interval]
+    ips = []
+    X   = []
+
+    for ip, data in ip_features.items():
+        if ip in WHITELIST:
+            continue
+
+        times         = sorted(data["times"])
+        attempt_count = len(times)
+        time_spread   = times[-1] - times[0] if len(times) > 1 else 0
+        unique_users  = len(data["usernames"])
+        avg_interval  = time_spread / attempt_count if attempt_count > 1 else 0
+
+        ips.append(ip)
+        X.append([attempt_count, time_spread, unique_users, avg_interval])
+
+    if len(X) < 2:
+        print("[~] Not enough IPs for ML comparison (need 2+)")
+        return []
+
+    # Train Isolation Forest
+    # contamination = expected proportion of anomalies in the data
+    model       = IsolationForest(contamination=0.3, random_state=42)
+    X_array     = np.array(X)
+    predictions = model.fit_predict(X_array)
+    scores      = model.decision_function(X_array)
+
+    # Collect anomalies — IsolationForest returns -1 for anomalies
+    ml_alerts = []
+
+    for i, prediction in enumerate(predictions):
+        if prediction == -1:
+            ml_alerts.append({
+                "ip":            ips[i],
+                "attempt_count": int(X[i][0]),
+                "time_spread":   int(X[i][1]),
+                "unique_users":  int(X[i][2]),
+                "avg_interval":  round(X[i][3], 1),
+                "anomaly_score": round(float(scores[i]), 4)
+            })
+            print(f"[ML] Anomaly detected — {ips[i]} "
+                  f"(score: {scores[i]:.4f}, "
+                  f"attempts: {int(X[i][0])}, "
+                  f"users targeted: {int(X[i][2])})")
+
+    return ml_alerts
+
+
+def generate_html_report(attacks, ml_alerts=None, filepath="report.html"):
     """
     Generates a clean HTML threat report
-    from the list of detected attacks.
+    from the list of detected attacks and ML anomalies.
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Build the attack rows
+    if ml_alerts is None:
+        ml_alerts = []
+
+    # Build rule-based attack rows
     if attacks:
         rows = ""
         for i, attack in enumerate(attacks, 1):
             severity = attack["severity"]
 
-            # Color code by severity
             if severity == "HIGH":
                 badge = '<span style="background:#ff4444;color:white;padding:3px 10px;border-radius:12px;font-size:12px;">HIGH</span>'
             elif severity == "MEDIUM":
@@ -161,7 +245,24 @@ def generate_html_report(attacks, filepath="report.html"):
         summary_color = "#4CAF50"
         summary_text  = "No Threats Detected"
 
-    # full HTML page
+    # Build ML anomaly rows
+    if ml_alerts:
+        ml_rows = ""
+        for alert in ml_alerts:
+            ml_rows += f"""
+            <tr>
+                <td><code>{alert['ip']}</code></td>
+                <td>{alert['attempt_count']}</td>
+                <td>{alert['unique_users']}</td>
+                <td>{alert['avg_interval']}s</td>
+                <td>{alert['anomaly_score']}</td>
+                <td><span style="background:#ff4444;color:white;padding:3px 10px;border-radius:12px;font-size:12px;">ANOMALY</span></td>
+            </tr>
+            """
+    else:
+        ml_rows = '<tr><td colspan="6" style="text-align:center;color:#888;">No ML anomalies detected</td></tr>'
+
+    # Build the full HTML page
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -205,7 +306,7 @@ def generate_html_report(attacks, filepath="report.html"):
 
         .cards {{
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             margin-bottom: 24px;
         }}
@@ -222,6 +323,10 @@ def generate_html_report(attacks, filepath="report.html"):
             font-size: 32px;
             font-weight: bold;
             color: #00e5ff;
+        }}
+
+        .card .number.ml {{
+            color: #7c3aed;
         }}
 
         .card .label {{
@@ -248,6 +353,7 @@ def generate_html_report(attacks, filepath="report.html"):
             border: 1px solid #1e2535;
             border-radius: 8px;
             overflow: hidden;
+            margin-bottom: 24px;
         }}
 
         .table-wrap h2 {{
@@ -257,6 +363,10 @@ def generate_html_report(attacks, filepath="report.html"):
             text-transform: uppercase;
             color: #00e5ff;
             border-bottom: 1px solid #1e2535;
+        }}
+
+        .table-wrap h2.ml {{
+            color: #7c3aed;
         }}
 
         table {{
@@ -303,7 +413,7 @@ def generate_html_report(attacks, filepath="report.html"):
 <div class="container">
 
     <div class="header">
-        <h1>⚡ SSH Brute-Force IDS — Threat Report</h1>
+        <h1>SSH Brute-Force IDS — Threat Report</h1>
         <p>Generated: {now} &nbsp;|&nbsp; Log file: {LOG_FILE} &nbsp;|&nbsp;
         Threshold: {THRESHOLD} attempts / {TIME_WINDOW}s</p>
     </div>
@@ -311,11 +421,15 @@ def generate_html_report(attacks, filepath="report.html"):
     <div class="cards">
         <div class="card">
             <div class="number">{len(attacks)}</div>
-            <div class="label">Threats Detected</div>
+            <div class="label">Rule Alerts</div>
+        </div>
+        <div class="card">
+            <div class="number ml">{len(ml_alerts)}</div>
+            <div class="label">ML Anomalies</div>
         </div>
         <div class="card">
             <div class="number">{THRESHOLD}</div>
-            <div class="label">Alert Threshold</div>
+            <div class="label">Threshold</div>
         </div>
         <div class="card">
             <div class="number">{TIME_WINDOW}s</div>
@@ -328,7 +442,7 @@ def generate_html_report(attacks, filepath="report.html"):
     </div>
 
     <div class="table-wrap">
-        <h2>// Attack Details</h2>
+        <h2>// Rule-Based Detection</h2>
         <table>
             <thead>
                 <tr>
@@ -343,6 +457,25 @@ def generate_html_report(attacks, filepath="report.html"):
             </thead>
             <tbody>
                 {rows}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="table-wrap">
+        <h2 class="ml">// ML Anomaly Detection</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>IP Address</th>
+                    <th>Attempts</th>
+                    <th>Unique Users</th>
+                    <th>Avg Interval</th>
+                    <th>Anomaly Score</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {ml_rows}
             </tbody>
         </table>
     </div>
@@ -362,32 +495,163 @@ def generate_html_report(attacks, filepath="report.html"):
     print(f"[*] HTML report saved to {filepath}")
 
 
+def live_monitor(filepath):
+    """
+    Watches auth.log in real time.
+    Every new line added to the file is
+    immediately analyzed for brute-force patterns.
+    Runs forever until user presses Ctrl+C.
+    """
+    print("\n[*] SSH Brute-Force IDS — Live Monitoring Mode")
+    print("[*] " + "─" * 42)
+    print(f"[*] Watching {filepath} for new entries...")
+    print("[*] Press Ctrl+C to stop\n")
+
+    # Tracks failed attempts per IP in memory
+    live_attempts = defaultdict(list)
+
+    # Same regex pattern as parse_log
+    pattern = r'(\w{3}\s+\d+\s+\d+:\d+:\d+).*Failed password for (\w+) from (\d+\.\d+\.\d+\.\d+)'
+
+    # Open the file and jump to the END
+    with open(filepath, "r") as f:
+        f.seek(0, 2)
+
+        try:
+            while True:
+                line = f.readline()
+
+                # No new line yet — wait and try again
+                if not line:
+                    time.sleep(0.5)
+                    continue
+
+                match = re.search(pattern, line)
+                if not match:
+                    continue
+
+                raw_time = match.group(1)
+                username = match.group(2)
+                ip       = match.group(3)
+
+                # Skip whitelisted IPs
+                if ip in WHITELIST:
+                    continue
+
+                time_obj = datetime.strptime(raw_time, "%b %d %H:%M:%S")
+
+                live_attempts[ip].append({
+                    "time":     time_obj,
+                    "username": username
+                })
+
+                count = len(live_attempts[ip])
+                print(f"[{time_obj.strftime('%H:%M:%S')}] "
+                      f"Failed login #{count} — {ip} tried user '{username}'")
+
+          
+                attempts = sorted(live_attempts[ip], key=lambda x: x["time"])
+                window   = []
+
+                for attempt in attempts:
+                    time_diff = (time_obj - attempt["time"]).seconds
+                    if time_diff <= TIME_WINDOW:
+                        window.append(attempt)
+
+                # If threshold reached → fire alert
+                if len(window) >= THRESHOLD:
+                    attack = {
+                        "ip":         ip,
+                        "count":      len(window),
+                        "first_seen": window[0]["time"].strftime("%H:%M:%S"),
+                        "last_seen":  window[-1]["time"].strftime("%H:%M:%S"),
+                        "usernames":  list(set([a["username"] for a in window])),
+                        "severity":   "HIGH" if len(window) >= 10 else "MEDIUM" if len(window) >= 7 else "LOW"
+                    }
+
+                    print_alert(attack)
+                    save_alerts([attack], ALERT_FILE)
+                    generate_html_report([attack])
+
+                    
+                    live_attempts[ip] = []
+
+        except KeyboardInterrupt:
+            print("\n\n[*] Monitoring stopped by user.")
+            print("[*] Final report saved to report.html\n")
+
+
 def main():
     print("\n[*] SSH Brute-Force Intrusion Detection System")
     print("[*] " + "─" * 42)
-    print(f"[*] Reading {LOG_FILE}...")
+    print("[*] Select mode:")
+    print("[*]   1 — Scan mode    (analyze existing log file)")
+    print("[*]   2 — Monitor mode (watch log file live)")
+    print()
 
-    # Step 1 — Parse the log
-    failed_attempts = parse_log(LOG_FILE)
-    print(f"[*] Found {len(failed_attempts)} failed login attempts")
+    mode = input("    Enter 1 or 2: ").strip()
 
-    # Step 2 — Run detection
-    print(f"[*] Analyzing with threshold={THRESHOLD}, window={TIME_WINDOW}s...")
-    attacks = detect_bruteforce(failed_attempts)
+    if mode == "1":
+        print(f"\n[*] Reading {LOG_FILE}...")
 
-    # Step 3 — Print alerts and generate outputs
-    if attacks:
-        for attack in attacks:
-            print_alert(attack)
+        # Step 1 — Parse the log
+        failed_attempts = parse_log(LOG_FILE)
+        print(f"[*] Found {len(failed_attempts)} failed login attempts")
+
+        # Step 2 — Rule-based detection
+        print(f"\n[*] Running rule-based detection...")
+        print(f"[*] Threshold={THRESHOLD}, window={TIME_WINDOW}s")
+        attacks = detect_bruteforce(failed_attempts)
+
+        if attacks:
+            for attack in attacks:
+                print_alert(attack)
+        else:
+            print("[✓] Rule-based: No threats detected")
+
+        # Step 3 — ML anomaly detection
+        print(f"\n[*] Running ML anomaly detection...")
+        ml_alerts = ml_anomaly_detection(failed_attempts)
+
+        if not ml_alerts:
+            print("[✓] ML detection: No anomalies detected")
+
+        # Step 4 — Compare results
+        print("\n" + "─" * 45)
+        print("  DETECTION COMPARISON")
+        print("─" * 45)
+        print(f"  Rule-based alerts : {len(attacks)}")
+        print(f"  ML anomaly alerts : {len(ml_alerts)}")
+
+        rule_ips = set(a["ip"] for a in attacks)
+        ml_ips   = set(a["ip"] for a in ml_alerts)
+
+        only_rule = rule_ips - ml_ips
+        only_ml   = ml_ips - rule_ips
+        both      = rule_ips & ml_ips
+
+        if both:
+            print(f"  Caught by BOTH    : {', '.join(both)}")
+        if only_rule:
+            print(f"  Rule-based only   : {', '.join(only_rule)}")
+        if only_ml:
+            print(f"  ML only (subtle)  : {', '.join(only_ml)}")
+        print("─" * 45)
+
+        # Step 5 — Save and report
         save_alerts(attacks, ALERT_FILE)
-        generate_html_report(attacks)
-        print(f"\n[!] Scan complete — {len(attacks)} threat(s) detected.\n")
+        generate_html_report(attacks, ml_alerts)
+        print(f"\n[!] Scan complete — "
+              f"{len(attacks)} rule alert(s), "
+              f"{len(ml_alerts)} ML anomaly(s)\n")
+
+    elif mode == "2":
+        live_monitor(LOG_FILE)
+
     else:
-        save_alerts([], ALERT_FILE)
-        generate_html_report([])
-        print("\n[✓] Scan complete — No threats detected.\n")
+        print("\n[!] Invalid option. Please enter 1 or 2.\n")
 
 
-
+#Entry point
 if __name__ == "__main__":
     main()
